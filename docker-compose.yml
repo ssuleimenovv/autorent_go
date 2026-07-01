@@ -1,0 +1,120 @@
+services:
+  # Identity Service (Go)
+  identity-db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: postgres_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - identity_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d postgres_db"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks:
+      - backend-go
+
+  identity-service:
+    build:
+      context: .
+      dockerfile: ./shared/identity-service/Dockerfile
+    environment:
+      ConnectionStrings__DbConnection: "postgres://postgres:postgres@identity-db:5432/postgres_db?sslmode=disable"
+      RabbitMq__HostName: rabbitmq
+      RabbitMq__Port: 5672
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+      LOG_PATH: /tmp/autorent/identity-service
+    ports:
+      - "1244:8080"
+    depends_on:
+      identity-db:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - backend-go
+
+  # Message Queue
+  rabbitmq:
+    image: rabbitmq:3.13-management
+    environment:
+      RABBITMQ_DEFAULT_USER: autorent
+      RABBITMQ_DEFAULT_PASS: autorent
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+    networks:
+      - backend-go
+
+  # Observability
+  prometheus:
+    image: prom/prometheus:latest
+    ports:
+      - "9090:9090"
+    volumes:
+      - prometheus_data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+    networks:
+      - backend-go
+
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: admin
+    volumes:
+      - grafana_storage:/var/lib/grafana
+    networks:
+      - backend-go
+
+  loki:
+    image: grafana/loki:latest
+    ports:
+      - "3100:3100"
+    volumes:
+      - loki_data:/loki
+    networks:
+      - backend-go
+
+  tempo:
+    image: grafana/tempo:latest
+    ports:
+      - "3200:3200"
+    volumes:
+      - tempo_data:/var/tempo
+    networks:
+      - backend-go
+
+  otel-collector:
+    image: otel/opentelemetry-collector:latest
+    ports:
+      - "4318:4318"
+    command: ["--config=/etc/otel-collector-config.yml"]
+    networks:
+      - backend-go
+
+volumes:
+  identity_pgdata:
+  rabbitmq_data:
+  prometheus_data:
+  grafana_storage:
+  loki_data:
+  tempo_data:
+
+networks:
+  backend-go:
+    driver: bridge
